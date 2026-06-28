@@ -2,12 +2,12 @@
   "name": "neuron",
   "version": "0.1.0",
   "private": true,
-  "scripts": {
-    "dev": "next dev --webpack",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
-  },
+ "scripts": {
+  "dev": "next dev --webpack",
+  "build": "prisma generate && next build",
+  "start": "next start",
+  "lint": "eslint"
+},
   "dependencies": {
     "@clerk/nextjs": "^7.3.5",
     "@langchain/community": "^1.1.28",
