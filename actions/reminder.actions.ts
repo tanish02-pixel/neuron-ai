@@ -90,7 +90,7 @@ const suggestions =
 
       <ul>
         ${userNotes
-          .map((n) => `<li>${n.name}</li>`)
+          .map((n: { name: string }) => `<li>${n.name}</li>`)
           .join("")}
       </ul>
 
