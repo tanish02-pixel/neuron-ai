@@ -152,12 +152,9 @@ async function generateRevisionSuggestions(
 
   const context = notes
     .map(
-      (n) =>
-        `PDF: ${n.name}\n${n.content.slice(
-          0,
-          2000
-        )}`
-    )
+  (n: { name: string; content: string }) =>
+    `PDF: ${n.name}\n${n.content.slice(0, 2000)}`
+)
     .join("\n\n");
 
       const completion =
