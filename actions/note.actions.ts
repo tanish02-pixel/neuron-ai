@@ -2,10 +2,6 @@
 
 import { prisma } from "@/lib/prisma";
 import { UTApi } from "uploadthing/server";
-
-import fs from "fs";
-import path from "path";
-
 import { auth } from "@clerk/nextjs/server";
 
 const utapi = new UTApi();
@@ -17,56 +13,78 @@ interface CreateNoteParams {
 
 async function extractPdfText(fileUrl: string) {
   const response = await fetch(fileUrl);
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch PDF: ${response.status} ${response.statusText}`
+    );
+  }
+
   const arrayBuffer = await response.arrayBuffer();
 
-  const tempFilePath = path.join(
-    process.cwd(),
-    `${Date.now()}.pdf`
-  );
-
-  fs.writeFileSync(tempFilePath, Buffer.from(arrayBuffer));
-
   const pdf = require("pdf-parse/lib/pdf-parse.js");
-  const dataBuffer = fs.readFileSync(tempFilePath);
-  const data = await pdf(dataBuffer);
 
-  fs.unlinkSync(tempFilePath);
+  const data = await pdf(Buffer.from(arrayBuffer));
 
   return data.text
     .replace(/\0/g, "")
     .replace(/[\x01-\x08\x0B\x0C\x0E-\x1F]/g, "");
 }
 
-export async function createNote({ name, url }: CreateNoteParams) {
+export async function createNote({
+  name,
+  url,
+}: CreateNoteParams) {
   try {
     const { userId } = await auth();
-    if (!userId) throw new Error("Unauthorized");
 
-    const content = await extractPdfText(url);
+    if (!userId) {
+      throw new Error("Unauthorized");
+    }
 
-    // File size fetch karo URL se
-   const response = await fetch(url);
-const arrayBuffer = await response.arrayBuffer();
+    // Download once
+    const response = await fetch(url);
 
-const size = arrayBuffer.byteLength;
+    if (!response.ok) {
+      throw new Error("Failed to download uploaded PDF");
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const size = arrayBuffer.byteLength;
+
+    // Parse PDF directly from memory
+    const pdf = require("pdf-parse/lib/pdf-parse.js");
+
+    const data = await pdf(Buffer.from(arrayBuffer));
+
+    const content = data.text
+      .replace(/\0/g, "")
+      .replace(/[\x01-\x08\x0B\x0C\x0E-\x1F]/g, "");
 
     const note = await prisma.note.create({
-      data: { name, url, content, size, userId },
+      data: {
+        name,
+        url,
+        content,
+        size,
+        userId,
+      },
     });
 
     return note;
   } catch (error) {
-    console.log(error);
-    throw new Error("Failed to create note");
+    console.error("CREATE NOTE ERROR:", error);
+    throw error;
   }
 }
-
-
 
 export async function getStorageStats() {
   try {
     const { userId } = await auth();
-    if (!userId) throw new Error("Unauthorized");
+
+    if (!userId) {
+      throw new Error("Unauthorized");
+    }
 
     const notes = await prisma.note.findMany({
       where: { userId },
@@ -75,89 +93,114 @@ export async function getStorageStats() {
 
     const flashcards = await prisma.flashcard.findMany({
       where: { userId },
-      select: { question: true, answer: true },
+      select: {
+        question: true,
+        answer: true,
+      },
     });
 
-
-
-     const chats = await prisma.chat.findMany({
+    const chats = await prisma.chat.findMany({
       where: { userId },
-      select: { question: true },
+      select: {
+        question: true,
+      },
     });
 
-    // PDF storage — actual file sizes
     const pdfBytes = notes.reduce(
-  (acc: number, n: { size: number }) => acc + n.size,
-  0
-);
+      (acc, note) => acc + note.size,
+      0
+    );
 
-    // Flashcards — text size estimate
     const flashcardBytes = flashcards.reduce(
-  (acc: number, f: { question: string; answer: string }) =>
-    acc + f.question.length + f.answer.length,
-  0
-);
+      (acc, flashcard) =>
+        acc +
+        flashcard.question.length +
+        flashcard.answer.length,
+      0
+    );
 
- const chatBytes = chats.reduce(
-  (acc: number, c: { question: string }) =>
-    acc + c.question.length,
-  0
-);
+    const chatBytes = chats.reduce(
+      (acc, chat) => acc + chat.question.length,
+      0
+    );
 
-    const totalBytes = pdfBytes + flashcardBytes + chatBytes;
-    const maxBytes = 2 * 1024 * 1024 * 1024; // 2 GB
+    const totalBytes =
+      pdfBytes +
+      flashcardBytes +
+      chatBytes;
 
-    function formatSize(bytes: number): string {
-      if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-      if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-      if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    const maxBytes =
+      2 * 1024 * 1024 * 1024;
+
+    function formatSize(bytes: number) {
+      if (bytes >= 1024 * 1024 * 1024)
+        return `${(
+          bytes /
+          (1024 * 1024 * 1024)
+        ).toFixed(1)} GB`;
+
+      if (bytes >= 1024 * 1024)
+        return `${(
+          bytes /
+          (1024 * 1024)
+        ).toFixed(1)} MB`;
+
+      if (bytes >= 1024)
+        return `${(
+          bytes / 1024
+        ).toFixed(1)} KB`;
+
       return `${bytes} B`;
     }
 
     return {
-  pdf: formatSize(pdfBytes),
-  flashcards: formatSize(flashcardBytes),
-  chats: formatSize(chatBytes),
-  total: formatSize(totalBytes),
-
-  percent: Math.min(
-    Number(
-      ((totalBytes / maxBytes) * 100).toFixed(2)
-    ),
-    100
-  ),
-
-  noteCount: notes.length,
-};
+      pdf: formatSize(pdfBytes),
+      flashcards: formatSize(
+        flashcardBytes
+      ),
+      chats: formatSize(chatBytes),
+      total: formatSize(totalBytes),
+      percent: Math.min(
+        Number(
+          (
+            (totalBytes / maxBytes) *
+            100
+          ).toFixed(2)
+        ),
+        100
+      ),
+      noteCount: notes.length,
+    };
   } catch (error) {
-    console.log(error);
-    throw new Error("Failed to fetch storage stats");
+    console.error(
+      "GET STORAGE ERROR:",
+      error
+    );
+    throw error;
   }
-
-  }
+}
 
 export async function deleteAllNotes() {
   try {
     const { userId } = await auth();
+
     if (!userId) {
       throw new Error("Unauthorized");
     }
 
     const notes = await prisma.note.findMany({
       where: { userId },
-      select: { url: true },
+      select: {
+        url: true,
+      },
     });
 
-    if (notes.length > 0) {
-     const fileKeys = notes
-  .map((note: { url: string }) => {
-    const parts = note.url.split("/f/");
-    return parts[1] ?? null;
-  })
-  .filter((key: string | null): key is string => key !== null);
-      if (fileKeys.length > 0) {
-        await utapi.deleteFiles(fileKeys);
-      }
+    const fileKeys = notes
+      .map((note) => note.url.split("/f/")[1])
+      .filter(Boolean) as string[];
+
+    if (fileKeys.length) {
+      await utapi.deleteFiles(fileKeys);
     }
 
     await prisma.note.deleteMany({
@@ -169,12 +212,17 @@ export async function deleteAllNotes() {
       deleted: notes.length,
     };
   } catch (error) {
-    console.error("Delete all notes error:", error);
-    throw new Error("Failed to delete notes");
+    console.error(
+      "DELETE ALL NOTES ERROR:",
+      error
+    );
+    throw error;
   }
 }
 
-export async function deleteNote(noteId: string) {
+export async function deleteNote(
+  noteId: string
+) {
   try {
     const { userId } = await auth();
 
@@ -182,18 +230,19 @@ export async function deleteNote(noteId: string) {
       throw new Error("Unauthorized");
     }
 
-   const note = await prisma.note.findUnique({
-  where: {
-    id: noteId,
-  },
-});
+    const note =
+      await prisma.note.findUnique({
+        where: {
+          id: noteId,
+        },
+      });
 
-if (!note) {
+    if (!note) {
       throw new Error("Note not found");
     }
 
-    const parts = note.url.split("/f/");
-    const fileKey = parts[1];
+    const fileKey =
+      note.url.split("/f/")[1];
 
     if (fileKey) {
       await utapi.deleteFiles(fileKey);
@@ -205,9 +254,14 @@ if (!note) {
       },
     });
 
-    return { success: true };
+    return {
+      success: true,
+    };
   } catch (error) {
-    console.log(error);
-    throw new Error("Failed to delete note");
+    console.error(
+      "DELETE NOTE ERROR:",
+      error
+    );
+    throw error;
   }
 }
