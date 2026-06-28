@@ -22,24 +22,43 @@ const supabase = createClient(
 export async function askAI(question: string, selectedNote: string) {
   try {
     const { userId } = await auth();
-    if (!userId) throw new Error("Unauthorized");
+
+    if (!userId) {
+      throw new Error("Unauthorized");
+    }
 
     const note = await prisma.note.findFirst({
-      where: { id: selectedNote, userId },
+      where: {
+        id: selectedNote,
+        userId,
+      },
     });
 
-    if (!note) throw new Error("Selected note not found");
+    if (!note) {
+      throw new Error("Selected note not found");
+    }
 
-    // Step 1: Generate embedding for question
+    // Generate embedding for the question
     const embeddingResponse = await cohere.embed({
-      texts: [question],
       model: "embed-english-v3.0",
+      texts: [question],
       inputType: "search_query",
     });
 
-    const questionEmbedding = (embeddingResponse.embeddings as number[][])[0];
+    let questionEmbedding: number[];
 
-    // Step 2: Find similar chunks from pgvector
+    if (Array.isArray(embeddingResponse.embeddings)) {
+      questionEmbedding = embeddingResponse.embeddings[0] as number[];
+    } else {
+      questionEmbedding = embeddingResponse.embeddings.float![0];
+    }
+
+    console.log(
+      "Question embedding dimensions:",
+      questionEmbedding.length
+    );
+
+    // Vector search
     const { data: similarChunks, error } = await supabase.rpc(
       "match_note_embeddings",
       {
@@ -49,42 +68,53 @@ export async function askAI(question: string, selectedNote: string) {
       }
     );
 
+    console.log("RPC ERROR:", error);
+    console.log("RPC RESULT:", similarChunks);
+
     let context = "";
 
     if (error || !similarChunks || similarChunks.length === 0) {
-      // Fallback to full content
-      context = (note as any).content || "";
+      console.log("Using full PDF as fallback...");
+      context = note.content;
     } else {
       context = similarChunks
         .map((chunk: any) => chunk.chunk_text)
         .join("\n\n");
     }
 
-    // Save chat analytics
     await prisma.chat.create({
-      data: { question, userId },
+      data: {
+        question,
+        userId,
+      },
     });
 
     const completion = await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
       messages: [
-       {
-  role: "system",
-  content:
-    "You are Neuron AI, an intelligent assistant. First try to answer from the provided PDF context. If the answer is not found in the PDF context, use your general knowledge to answer but mention that 'This answer is based on general knowledge, not from the PDF.'",
-},
+        {
+          role: "system",
+          content:
+            "You are Neuron AI. Always answer using the provided PDF context whenever possible. If the answer is not available in the PDF, answer using your own knowledge and clearly mention that the answer is based on general knowledge.",
+        },
         {
           role: "user",
-          content: `Context:\n${context}\n\nQuestion:\n${question}`,
+          content: `PDF Context:
+
+${context}
+
+Question:
+${question}`,
         },
       ],
     });
 
     return (
-      completion.choices[0].message.content || "No response generated."
+      completion.choices[0].message.content ??
+      "No response generated."
     );
   } catch (error) {
-    console.log(error);
+    console.error("CHAT ERROR:", error);
     throw new Error("Failed to get AI response");
   }
 }

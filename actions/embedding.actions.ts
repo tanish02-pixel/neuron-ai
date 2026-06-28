@@ -28,46 +28,89 @@ function chunkText(text: string, chunkSize = 500): string[] {
 export async function generateEmbeddings(noteId: string) {
   try {
     const { userId } = await auth();
-    if (!userId) throw new Error("Unauthorized");
+
+    if (!userId) {
+      throw new Error("Unauthorized");
+    }
+
+    console.log("Generating embeddings for:", noteId);
 
     const note = await prisma.note.findFirst({
-      where: { id: noteId, userId },
+      where: {
+        id: noteId,
+        userId,
+      },
     });
 
-    if (!note) throw new Error("Note not found");
+    if (!note) {
+      throw new Error("Note not found");
+    }
 
-    const content = (note as any).content || "";
-    if (!content) throw new Error("Note has no content");
+    if (!note.content) {
+      throw new Error("Note content is empty");
+    }
 
-    // Delete old embeddings
-    await supabase
+    const chunks = chunkText(note.content);
+
+    console.log(`Created ${chunks.length} chunks`);
+
+    // Delete previous embeddings
+    const { error: deleteError } = await supabase
       .from("note_embeddings")
       .delete()
       .eq("note_id", noteId);
 
-    const chunks = chunkText(content);
+    if (deleteError) {
+      console.error("DELETE ERROR:", deleteError);
+      throw deleteError;
+    }
 
     for (let i = 0; i < chunks.length; i++) {
+      console.log(`Embedding chunk ${i + 1}/${chunks.length}`);
+
       const response = await cohere.embed({
-        texts: [chunks[i]],
         model: "embed-english-v3.0",
+        texts: [chunks[i]],
         inputType: "search_document",
       });
 
-      const embedding = (response.embeddings as number[][])[0];
+      let embedding: number[];
 
-      await supabase.from("note_embeddings").insert({
-        note_id: noteId,
-        user_id: userId,
-        chunk_text: chunks[i],
-        embedding: JSON.stringify(embedding),
-        chunk_index: i,
-      });
+      if (Array.isArray(response.embeddings)) {
+        embedding = response.embeddings[0] as number[];
+      } else {
+        embedding = response.embeddings.float![0];
+      }
+
+      console.log("Embedding dimensions:", embedding.length);
+
+      const { data, error } = await supabase
+        .from("note_embeddings")
+        .insert({
+          note_id: noteId,
+          user_id: userId,
+          chunk_text: chunks[i],
+          embedding: embedding, // DO NOT JSON.stringify
+          chunk_index: i,
+        })
+        .select();
+
+      console.log("INSERT DATA:", data);
+      console.log("INSERT ERROR:", error);
+
+      if (error) {
+        throw error;
+      }
     }
 
-    return { success: true, chunks: chunks.length };
+    console.log("Embeddings generated successfully.");
+
+    return {
+      success: true,
+      chunks: chunks.length,
+    };
   } catch (error) {
-    console.log(error);
+    console.error("EMBEDDING ERROR:", error);
     throw new Error("Failed to generate embeddings");
   }
 }
