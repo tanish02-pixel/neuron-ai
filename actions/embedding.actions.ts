@@ -109,8 +109,12 @@ export async function generateEmbeddings(noteId: string) {
       success: true,
       chunks: chunks.length,
     };
-  } catch (error) {
-    console.error("EMBEDDING ERROR:", error);
-    throw new Error("Failed to generate embeddings");
-  }
+  } catch (error: any) {
+  console.error("========== EMBEDDING ERROR ==========");
+  console.error(error);
+  console.error(error?.message);
+  console.error(error?.stack);
+
+  throw error;
+}
 }
