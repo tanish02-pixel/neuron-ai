@@ -305,7 +305,7 @@ export async function sendInactiveUserReminders() {
 
       <ul>
         ${userNotes
-          .map((n) => `<li>${n.name}</li>`)
+        .map((n: { name: string }) => `<li>${n.name}</li>`)
           .join("")}
       </ul>
 
@@ -319,7 +319,7 @@ export async function sendInactiveUserReminders() {
 
         <div style="margin-top:30px;text-align:center;">
         <a
-          href="http://localhost:3000/dashboard"
+          href="https://neuron-ai.vercel.app/dashboard"
           style="
             background:#06b6d4;
             color:black;
